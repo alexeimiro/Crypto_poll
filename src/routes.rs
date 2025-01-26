@@ -23,7 +23,7 @@ pub fn create_routes(pool: PgPool) -> impl Filter<Extract = impl warp::Reply, Er
     // Define the vote_for_crypto route with CORS
     let vote_route = warp::path("vote")
         .and(warp::post())
-        .and(warp::body::json())
+        .and(warp::body::bytes()) // Accept raw bytes (plain text)
         .and(with_pool(pool.clone()))
         .and_then(vote_for_crypto)
         .with(cors.clone()); // Apply CORS to this route

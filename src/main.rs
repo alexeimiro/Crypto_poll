@@ -10,6 +10,18 @@ use std::env;
 
 #[tokio::main]
 async fn main() {
+    match binance::fetch_crypto_prices().await {
+        Ok(prices) => {
+            println!("Fetched {} cryptocurrencies:", prices.len());
+            for crypto in prices {
+                println!("{}: {}", crypto.symbol, crypto.price);
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to fetch cryptocurrency prices: {}", e);
+        }
+    }
+
     dotenv().ok(); // Load environment variables from .env file
 
     // Get the port from the environment (default to 3030 for local development)
