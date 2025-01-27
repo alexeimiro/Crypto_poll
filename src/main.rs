@@ -29,6 +29,10 @@ async fn main() -> std::io::Result<()> {
         .await
         .expect("Failed to run migrations");
 
+    // Get the PORT environment variable (default to 8080 if not set)
+    let port = env::var("PORT").unwrap_or_else(|_| "8080".to_string());
+    let bind_address = format!("0.0.0.0:{}", port);
+
     // Start the Actix server
     HttpServer::new(move || {
         App::new()
@@ -36,7 +40,7 @@ async fn main() -> std::io::Result<()> {
             .configure(routes::config_routes)
             .wrap(actix_web::middleware::Logger::default())
     })
-    .bind("127.0.0.1:8080")?
+    .bind(&bind_address)?
     .run()
     .await
 }
