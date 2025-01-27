@@ -1,40 +1,42 @@
-// src/main.rs
-mod binance;
-mod poll;
-mod handlers;
-mod routes;
-
-use sqlx::PgPool;
+// main.rs
+use actix_web::{web, App, HttpServer};
 use dotenv::dotenv;
+use sqlx::postgres::PgPoolOptions;
 use std::env;
 
-#[tokio::main]
-async fn main() {
-    match binance::fetch_crypto_prices().await {
-        Ok(prices) => {
-            println!("Fetched {} cryptocurrencies:", prices.len());
-            for crypto in prices {
-                println!("{}: {}", crypto.symbol, crypto.price);
-            }
-        }
-        Err(e) => {
-            eprintln!("Failed to fetch cryptocurrency prices: {}", e);
-        }
-    }
+mod models;
+mod handlers;
+mod routes;
+mod services;
 
+#[actix_web::main]
+async fn main() -> std::io::Result<()> {
     dotenv().ok(); // Load environment variables from .env file
 
-    // Get the port from the environment (default to 3030 for local development)
-    let port = env::var("PORT").unwrap_or_else(|_| "3030".to_string());
-    let port = port.parse::<u16>().expect("PORT must be a valid number");
-
-    // Create the database connection pool
+    // Read DATABASE_URL from environment
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-    let pool = PgPool::connect(&database_url).await.expect("Failed to connect to the database");
 
-    // Pass the pool to the routes
-    let routes = routes::create_routes(pool);
+    // Create a connection pool
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await
+        .expect("Failed to connect to the database");
 
-    // Start the server
-    warp::serve(routes).run(([0, 0, 0, 0], port)).await;
+    // Run migrations
+    sqlx::migrate!("./migrations")
+        .run(&pool)
+        .await
+        .expect("Failed to run migrations");
+
+    // Start the Actix server
+    HttpServer::new(move || {
+        App::new()
+            .app_data(web::Data::new(pool.clone())) // Share the database pool
+            .configure(routes::config_routes)
+            .wrap(actix_web::middleware::Logger::default())
+    })
+    .bind("127.0.0.1:8080")?
+    .run()
+    .await
 }
