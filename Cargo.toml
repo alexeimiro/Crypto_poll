@@ -6,7 +6,7 @@ edition = "2021"
 [dependencies]
 axum = { version = "0.8.1", features = ["macros"] }
 tokio = { version = "1.0", features = ["full"] }
-sqlx = { version = "0.8.3", features = ["postgres", "uuid", "chrono", "json", "runtime-tokio-native-tls"] }
+sqlx = { version = "0.8.3", features = ["postgres", "uuid", "chrono", "json", "runtime-tokio-native-tls", "offline"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"  # Added for JSON handling
 chrono = { version = "0.4", features = ["serde"] }
