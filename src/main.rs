@@ -5,10 +5,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, types::Json as SqlxJson, FromRow, PgPool};
 use uuid::Uuid;
+use chrono::{DateTime, Utc};
 
 #[derive(Debug)]
 struct AppError(sqlx::Error);
