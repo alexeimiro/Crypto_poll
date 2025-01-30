@@ -1,46 +1,166 @@
-// main.rs
-use actix_web::{web, App, HttpServer};
-use dotenv::dotenv;
-use sqlx::postgres::PgPoolOptions;
-use std::env;
+use axum::{
+    extract::Extension,
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{get, post},
+    Json, Router,
+};
+use serde::{Deserialize, Serialize};
+use sqlx::{postgres::PgPoolOptions, types::Json as SqlxJson, FromRow, PgPool};
+use uuid::Uuid;
+use chrono::{DateTime, Utc};
 
-mod models;
-mod handlers;
-mod routes;
-mod services;
+#[derive(Debug)]
+struct AppError(sqlx::Error);
 
-#[actix_web::main]
-async fn main() -> std::io::Result<()> {
-    dotenv().ok(); // Load environment variables from .env file
+impl IntoResponse for AppError {
+    fn into_response(self) -> axum::response::Response {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Database error: {}", self.0),
+        )
+            .into_response()
+    }
+}
 
-    // Read DATABASE_URL from environment
-    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+impl From<sqlx::Error> for AppError {
+    fn from(err: sqlx::Error) -> Self {
+        AppError(err)
+    }
+}
 
-    // Create a connection pool
+#[derive(Debug, Serialize, Deserialize, FromRow)]
+struct Poll {
+    id: Uuid,
+    title: String,
+    options: SqlxJson<Vec<String>>,
+    expires_at: DateTime<Utc>,
+    created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreatePollRequest {
+    title: String,
+    options: Vec<String>,
+    expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize)]
+struct PollResults {
+    options: Vec<PollOptionResult>,
+    total_votes: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct PollOptionResult {
+    text: String,
+    votes: i64,
+    percentage: f64,
+}
+
+#[axum::debug_handler]
+async fn create_poll(
+    Extension(pool): Extension<PgPool>,
+    Json(payload): Json<CreatePollRequest>,
+) -> Result<Json<Poll>, AppError> {
+    let poll = sqlx::query_as!(
+        Poll,
+        r#"
+        INSERT INTO polls (id, title, options, expires_at, created_at)
+        VALUES ($1, $2, $3, $4, NOW())
+        RETURNING 
+            id, 
+            title, 
+            options as "options!: SqlxJson<Vec<String>>", 
+            expires_at as "expires_at!: DateTime<Utc>", 
+            created_at as "created_at!: DateTime<Utc>"
+        "#,
+        Uuid::new_v4(),
+        payload.title,
+        SqlxJson(payload.options) as _,
+        payload.expires_at
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    Ok(Json(poll))
+}
+
+#[axum::debug_handler]
+async fn get_poll_results(
+    Extension(pool): Extension<PgPool>,
+    axum::extract::Path(poll_id): axum::extract::Path<Uuid>,
+) -> Result<Json<PollResults>, AppError> {
+    let poll = sqlx::query_as!(
+        Poll,
+        r#"SELECT 
+            id, 
+            title, 
+            options as "options!: SqlxJson<Vec<String>>", 
+            expires_at as "expires_at!: DateTime<Utc>", 
+            created_at as "created_at!: DateTime<Utc>" 
+        FROM polls WHERE id = $1"#,
+        poll_id
+    )
+    .fetch_one(&pool)
+    .await?;
+
+    let total_votes = sqlx::query!(
+        "SELECT COUNT(*) as count FROM votes WHERE poll_id = $1",
+        poll_id
+    )
+    .fetch_one(&pool)
+    .await?
+    .count
+    .unwrap_or(0);
+
+    let mut options = Vec::new();
+
+    for (index, option_text) in poll.options.0.iter().enumerate() {
+        let votes = sqlx::query!(
+            "SELECT COUNT(*) as count FROM votes 
+            WHERE poll_id = $1 AND option_index = $2",
+            poll_id,
+            index as i32
+        )
+        .fetch_one(&pool)
+        .await?
+        .count
+        .unwrap_or(0);
+
+        let percentage = if total_votes > 0 {
+            (votes as f64 / total_votes as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        options.push(PollOptionResult {
+            text: option_text.clone(),
+            votes,
+            percentage,
+        });
+    }
+
+    Ok(Json(PollResults {
+        options,
+        total_votes,
+    }))
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenvy::dotenv().ok();
     let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&database_url)
-        .await
-        .expect("Failed to connect to the database");
+        .connect(&std::env::var("DATABASE_URL")?)
+        .await?;
 
-    // Run migrations
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .expect("Failed to run migrations");
+    let app = Router::new()
+        .route("/polls", post(create_poll))
+        .route("/polls/{id}/results", get(get_poll_results))
+        .layer(Extension(pool));
 
-    // Get the PORT environment variable (default to 8080 if not set)
-    let port = env::var("PORT").unwrap_or_else(|_| "8080".to_string());
-    let bind_address = format!("0.0.0.0:{}", port);
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+    axum::serve(listener, app).await?;
 
-    // Start the Actix server
-    HttpServer::new(move || {
-        App::new()
-            .app_data(web::Data::new(pool.clone())) // Share the database pool
-            .configure(routes::config_routes)
-            .wrap(actix_web::middleware::Logger::default())
-    })
-    .bind(&bind_address)?
-    .run()
-    .await
+    Ok(())
 }

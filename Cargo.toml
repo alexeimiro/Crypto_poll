@@ -1,14 +1,15 @@
 [package]
-name = "poll"
+name = "poll-backend"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-actix-web = "4.4.0"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-reqwest = { version = "0.11", features = ["json"] }
+axum = { version = "0.8.1", features = ["macros"] }
 tokio = { version = "1.0", features = ["full"] }
-futures = "0.3"
-sqlx = { version = "0.7", features = ["postgres", "runtime-tokio-native-tls"] }
-dotenv = "0.15"  
+sqlx = { version = "0.8.3", features = ["postgres", "uuid", "chrono", "json", "runtime-tokio-native-tls"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"  # Added for JSON handling
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.12.1", features = ["v4", "serde"] }
+tower-http = { version = "0.5", features = ["cors"] }  # Removed compression
+dotenvy = "0.15"
