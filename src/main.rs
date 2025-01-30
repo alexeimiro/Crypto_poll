@@ -1,12 +1,13 @@
 use axum::{
     extract::Extension,
-    http::StatusCode,
+    http::{header::HeaderValue, Method, StatusCode},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, types::Json as SqlxJson, FromRow, PgPool};
+use tower_http::cors::{AllowHeaders, CorsLayer};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 
@@ -154,10 +155,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .connect(&std::env::var("DATABASE_URL")?)
         .await?;
 
+    // Configure CORS
+    let cors = CorsLayer::new()
+        .allow_origin(
+            "https://crypto-poll-frontend.onrender.com"
+                .parse::<HeaderValue>()?
+        )
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers(AllowHeaders::any());
+
     let app = Router::new()
         .route("/polls", post(create_poll))
-        .route("/polls/{id}/results", get(get_poll_results))
-        .layer(Extension(pool));
+        .route("/polls/{id}/results", get(get_poll_results)) // Fixed route syntax
+        .layer(Extension(pool))
+        .layer(cors);
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
     axum::serve(listener, app).await?;
