@@ -13,3 +13,4 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1.12.1", features = ["v4", "serde"] }
 tower-http = { version = "0.5", features = ["cors"] }  # Removed compression
 dotenvy = "0.15"
+http = "1.2.0"
