@@ -26,6 +26,7 @@ use tracing_subscriber;
 enum AppError {
     Validation(String),
     Database(sqlx::Error),
+    NotFound(String),
 }
 
 impl IntoResponse for AppError {
@@ -36,13 +37,9 @@ impl IntoResponse for AppError {
                 StatusCode::INTERNAL_SERVER_ERROR,
                 format!("Database error: {}", e),
             ),
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
         };
-
-        let body = Json(json!({
-            "error": error_message
-        }));
-
-        (status, body).into_response()
+        Json(json!({ "error": error_message })).into_response()
     }
 }
 
@@ -86,8 +83,8 @@ async fn create_poll(
     Extension(pool): Extension<PgPool>,
     Json(payload): Json<CreatePollRequest>,
 ) -> Result<Json<Poll>, AppError> {
-    // Validate request payload
     let title = payload.title.trim();
+    
     if title.is_empty() {
         return Err(AppError::Validation("Poll title cannot be empty".into()));
     }
@@ -133,31 +130,22 @@ async fn get_poll_results(
     Extension(pool): Extension<PgPool>,
     axum::extract::Path(poll_id): axum::extract::Path<Uuid>,
 ) -> Result<Json<PollResults>, AppError> {
-    
+
    debug!("Fetching results for poll: {}", poll_id);
     
-   let poll = match sqlx::query_as!(
+   let poll = sqlx::query_as!(
        Poll,
-       r#"SELECT 
-           id, 
-           title, 
-           options as "options!: SqlxJson<Vec<String>>", 
-           expires_at as "expires_at!: DateTime<Utc>", 
-           created_at as "created_at!: DateTime<Utc>" 
+       r#"SELECT id, title, options as "options!: SqlxJson<Vec<String>>", expires_at as "expires_at!: DateTime<Utc>", created_at as "created_at!: DateTime<Utc>" 
        FROM polls WHERE id = $1"#,
        poll_id
    )
    .fetch_optional(&pool)
    .await?
-   {
-       Some(poll) => poll,
-       None => {
-           warn!("Poll not found: {}", poll_id);
-           return Err(AppError::Validation("Poll not found".into()));
-       }
-   };
+   .ok_or_else(|| {
+       warn!("Poll not found: {}", poll_id);
+       AppError::NotFound(format!("Poll {} not found", poll_id))
+   })?;
 
-   // Fetch total votes
    let total_votes = sqlx::query!(
        "SELECT COUNT(*) as count FROM votes WHERE poll_id = $1",
        poll_id
@@ -169,7 +157,6 @@ async fn get_poll_results(
 
    let mut options = Vec::with_capacity(poll.options.0.len());
 
-   // Fetch votes per option
    for (index, option_text) in poll.options.0.iter().enumerate() {
        let votes = sqlx::query!(
            "SELECT COUNT(*) as count FROM votes 
@@ -195,16 +182,12 @@ async fn get_poll_results(
        });
    }
 
-   Ok(Json(PollResults {
-       options,
-       total_votes,
-   }))
+   Ok(Json(PollResults { options, total_votes }))
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    
-   // Initialize tracing for logging
+
    tracing_subscriber::fmt()
        .with_env_filter("poll_backend=debug,tower_http=debug")
        .init();
@@ -219,23 +202,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
        .connect(&database_url)
        .await?;
 
-   // Verify database connection
-   sqlx::query("SELECT 1")
-       .execute(&pool)
-       .await
-       .expect("Database connection failed");
-
    let cors_origin = std::env::var("CORS_ORIGIN")
        .unwrap_or_else(|_| "https://crypto-poll-frontend.onrender.com".to_string());
 
-   // CORS configuration
    let cors = CorsLayer::new()
        .allow_origin(
-           cors_origin
-               .parse::<HeaderValue>()
-               .expect("Invalid CORS origin")
+           cors_origin.parse::<HeaderValue>().expect("Invalid CORS origin")
        )
-       .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
+       .allow_methods([Method::GET, Method::POST])
        .allow_headers(AllowHeaders::list([
            HeaderName::from_static("content-type"),
            HeaderName::from_static("authorization"),
@@ -246,14 +220,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
        ]))
        .max_age(Duration::from_secs(86400)); // 24-hour cache
 
-   // Define routes
    let app = Router::new()
        .route("/polls", post(create_poll))
        .route("/polls/{id}/results", get(get_poll_results))
        .layer(cors)
        .layer(Extension(pool));
 
-   // Start server
    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
    println!("Server running on http://0.0.0.0:3000");
    
