@@ -19,6 +19,8 @@ use sqlx::{
 use tower_http::cors::{AllowHeaders, CorsLayer, ExposeHeaders};
 use uuid::Uuid;
 use std::time::Duration;
+use tracing::{debug, warn};
+use tracing_subscriber;
 
 #[derive(Debug)]
 enum AppError {
@@ -132,8 +134,9 @@ async fn get_poll_results(
     axum::extract::Path(poll_id): axum::extract::Path<Uuid>,
 ) -> Result<Json<PollResults>, AppError> {
     
-   // Fetch poll details
-   let poll = sqlx::query_as!(
+   debug!("Fetching results for poll: {}", poll_id);
+    
+   let poll = match sqlx::query_as!(
        Poll,
        r#"SELECT 
            id, 
@@ -144,8 +147,15 @@ async fn get_poll_results(
        FROM polls WHERE id = $1"#,
        poll_id
    )
-   .fetch_one(&pool)
-   .await?;
+   .fetch_optional(&pool)
+   .await?
+   {
+       Some(poll) => poll,
+       None => {
+           warn!("Poll not found: {}", poll_id);
+           return Err(AppError::Validation("Poll not found".into()));
+       }
+   };
 
    // Fetch total votes
    let total_votes = sqlx::query!(
@@ -194,6 +204,11 @@ async fn get_poll_results(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
+   // Initialize tracing for logging
+   tracing_subscriber::fmt()
+       .with_env_filter("poll_backend=debug,tower_http=debug")
+       .init();
+
    dotenvy::dotenv().ok();
     
    let database_url = std::env::var("DATABASE_URL")
@@ -203,6 +218,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
        .max_connections(5)
        .connect(&database_url)
        .await?;
+
+   // Verify database connection
+   sqlx::query("SELECT 1")
+       .execute(&pool)
+       .await
+       .expect("Database connection failed");
 
    let cors_origin = std::env::var("CORS_ORIGIN")
        .unwrap_or_else(|_| "https://crypto-poll-frontend.onrender.com".to_string());

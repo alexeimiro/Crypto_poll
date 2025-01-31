@@ -14,3 +14,5 @@ uuid = { version = "1.12.1", features = ["v4", "serde"] }
 tower-http = { version = "0.5", features = ["cors"] }  # Removed compression
 dotenvy = "0.15"
 http = "1.2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
