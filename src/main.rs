@@ -1,5 +1,5 @@
 use axum::{
-    extract::Extension,
+    extract::{Extension, Path},
     http::{
         header::{HeaderName, HeaderValue},
         Method, StatusCode,
@@ -9,6 +9,7 @@ use axum::{
     Router,
 };
 use chrono::{DateTime, Utc};
+use dotenvy::dotenv;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::{
@@ -16,20 +17,23 @@ use sqlx::{
     types::Json as SqlxJson,
     FromRow, PgPool,
 };
-use tower_http::cors::{AllowHeaders, CorsLayer, ExposeHeaders};
-use uuid::Uuid;
+use std::net::SocketAddr; // Import SocketAddr for binding
 use std::time::Duration;
+use tower_http::cors::{AllowHeaders, CorsLayer, ExposeHeaders};
 use tracing::{debug, warn};
 use tracing_subscriber;
-use dotenvy::dotenv;
+use uuid::Uuid;
 
+// Define custom error types for consistent error handling
 #[derive(Debug)]
 enum AppError {
     Validation(String),
     Database(sqlx::Error),
     NotFound(String),
+    InvalidUuid(String), // New variant for invalid UUIDs
 }
 
+// Implement `IntoResponse` for `AppError` to convert errors into HTTP responses
 impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
         let (status, error_message) = match self {
@@ -39,17 +43,20 @@ impl IntoResponse for AppError {
                 format!("Database error: {}", e),
             ),
             AppError::NotFound(msg) => (StatusCode::NOT_FOUND, msg),
+            AppError::InvalidUuid(msg) => (StatusCode::BAD_REQUEST, msg), // Handle invalid UUIDs
         };
         Json(json!({ "error": error_message })).into_response()
     }
 }
 
+// Automatically convert `sqlx::Error` into `AppError`
 impl From<sqlx::Error> for AppError {
     fn from(err: sqlx::Error) -> Self {
         AppError::Database(err)
     }
 }
 
+// Poll structure for database interactions
 #[derive(Debug, Serialize, Deserialize, FromRow)]
 struct Poll {
     id: Uuid,
@@ -59,6 +66,7 @@ struct Poll {
     created_at: DateTime<Utc>,
 }
 
+// Request payload structure for creating a poll
 #[derive(Debug, Deserialize)]
 struct CreatePollRequest {
     title: String,
@@ -66,12 +74,14 @@ struct CreatePollRequest {
     expires_at: DateTime<Utc>,
 }
 
+// Response structure for poll results
 #[derive(Debug, Serialize)]
 struct PollResults {
     options: Vec<PollOptionResult>,
     total_votes: i64,
 }
 
+// Structure for each poll option's result
 #[derive(Debug, Serialize)]
 struct PollOptionResult {
     text: String,
@@ -79,13 +89,15 @@ struct PollOptionResult {
     percentage: f64,
 }
 
+// Handler to create a new poll
 #[axum::debug_handler]
 async fn create_poll(
     Extension(pool): Extension<PgPool>,
     Json(payload): Json<CreatePollRequest>,
 ) -> Result<Json<Poll>, AppError> {
     let title = payload.title.trim();
-    
+
+    // Validate the poll title and options
     if title.is_empty() {
         return Err(AppError::Validation("Poll title cannot be empty".into()));
     }
@@ -103,6 +115,7 @@ async fn create_poll(
         return Err(AppError::Validation("At least 2 non-empty options required".into()));
     }
 
+    // Insert the poll into the database
     let poll = sqlx::query_as!(
         Poll,
         r#"
@@ -126,14 +139,15 @@ async fn create_poll(
     Ok(Json(poll))
 }
 
+// Handler to fetch poll results by ID
 #[axum::debug_handler]
 async fn get_poll_results(
     Extension(pool): Extension<PgPool>,
-    axum::extract::Path(poll_id): axum::extract::Path<Uuid>,
+    Path(poll_id): Path<Uuid>, // Extract UUID from path
 ) -> Result<Json<PollResults>, AppError> {
-
    debug!("Fetching results for poll: {}", poll_id);
-    
+
+   // Fetch the poll from the database
    let poll = sqlx::query_as!(
        Poll,
        r#"SELECT id, title, options as "options!: SqlxJson<Vec<String>>", expires_at as "expires_at!: DateTime<Utc>", created_at as "created_at!: DateTime<Utc>" 
@@ -147,6 +161,7 @@ async fn get_poll_results(
        AppError::NotFound(format!("Poll {} not found", poll_id))
    })?;
 
+   // Fetch total votes for the poll
    let total_votes = sqlx::query!(
        "SELECT COUNT(*) as count FROM votes WHERE poll_id = $1",
        poll_id
@@ -156,8 +171,8 @@ async fn get_poll_results(
    .count
    .unwrap_or(0);
 
+   // Fetch votes for each option and calculate percentages
    let mut options = Vec::with_capacity(poll.options.0.len());
-
    for (index, option_text) in poll.options.0.iter().enumerate() {
        let votes = sqlx::query!(
            "SELECT COUNT(*) as count FROM votes 
@@ -186,15 +201,25 @@ async fn get_poll_results(
    Ok(Json(PollResults { options, total_votes }))
 }
 
+// Fallback handler for unmatched routes (404 Not Found)
+async fn handle_404() -> impl IntoResponse {
+     (
+         StatusCode::NOT_FOUND,
+         Json(json!({ "error": "Endpoint not found" })),
+     )
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+   // Load environment variables from `.env`
+   dotenv().ok();
 
-   dotenv().ok(); // Load environment variables
-
+   // Initialize tracing subscriber for logging/debugging
    tracing_subscriber::fmt()
        .with_env_filter("poll_backend=debug,tower_http=debug")
        .init();
 
+   // Read database URL from environment variable and connect to the database pool
    let database_url = std::env::var("DATABASE_URL")
        .expect("DATABASE_URL must be set");
     
@@ -203,10 +228,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
        .connect(&database_url)
        .await?;
 
-   // Read CORS origin from environment variable
+   // Read CORS origin from environment variable or use a default value
    let cors_origin = std::env::var("CORS_ORIGIN")
        .unwrap_or_else(|_| "https://crypto-poll-frontend.onrender.com".to_string());
 
+   // Configure CORS settings to allow requests from the frontend origin
    let cors = CorsLayer::new()
        .allow_origin(cors_origin.parse::<HeaderValue>().expect("Invalid CORS origin"))
        .allow_methods([Method::GET, Method::POST])
@@ -218,18 +244,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
            HeaderName::from_static("content-type"),
            HeaderName::from_static("authorization"),
        ]))
-       .max_age(Duration::from_secs(86400)); // 24-hour cache
+       .max_age(Duration::from_secs(86400)); // Cache CORS preflight response for 24 hours
 
+   // Define application routes and middleware layers
    let app = Router::new()
-       .route("/polls", post(create_poll))
-       .route("/polls/{id}/results", get(get_poll_results))
+       .route("/polls", post(create_poll))                 // Route to create a new poll
+       .route("/polls/{id}/results", get(get_poll_results)) // Route to fetch poll results by ID
+       .fallback(handle_404)                              // Fallback route for unmatched paths (404)
        .layer(cors)
        .layer(Extension(pool));
 
-   let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-   println!("Server running on http://0.0.0.0:3000");
-   
-   axum::serve(listener, app).await?;
+   // Start the Axum server on port 3000 and bind it to all interfaces (0.0.0.0)
+   let addr = SocketAddr::from(([0, 0, 0, 0], 3000)); // Bind to all interfaces on port 3000
 
-   Ok(())
+   println!("Server running on http://{}", addr);
+
+   axum_server::bind(addr).serve(app.into_make_service()).await?;
+                       // Await until server shuts down
+
+ Ok(())
 }
