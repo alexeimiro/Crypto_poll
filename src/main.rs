@@ -11,16 +11,12 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sqlx::{
-    postgres::PgPoolOptions,
-    types::Json as SqlxJson,
-    FromRow, PgPool,
-};
-use tower_http::cors::{AllowHeaders, CorsLayer, ExposeHeaders};
-use uuid::Uuid;
+use sqlx::{postgres::PgPoolOptions, types::Json as SqlxJson, FromRow, PgPool};
 use std::time::Duration;
+use tower_http::cors::{AllowHeaders, CorsLayer, ExposeHeaders};
 use tracing::{debug, warn};
 use tracing_subscriber;
+use uuid::Uuid;
 
 #[derive(Debug)]
 enum AppError {
@@ -84,7 +80,7 @@ async fn create_poll(
     Json(payload): Json<CreatePollRequest>,
 ) -> Result<Json<Poll>, AppError> {
     let title = payload.title.trim();
-    
+
     if title.is_empty() {
         return Err(AppError::Validation("Poll title cannot be empty".into()));
     }
@@ -93,13 +89,16 @@ async fn create_poll(
         return Err(AppError::Validation("At least 2 options required".into()));
     }
 
-    let valid_options: Vec<String> = payload.options
+    let valid_options: Vec<String> = payload
+        .options
         .into_iter()
         .filter(|opt| !opt.trim().is_empty())
         .collect();
 
     if valid_options.len() < 2 {
-        return Err(AppError::Validation("At least 2 non-empty options required".into()));
+        return Err(AppError::Validation(
+            "At least 2 non-empty options required".into(),
+        ));
     }
 
     let poll = sqlx::query_as!(
@@ -130,10 +129,9 @@ async fn get_poll_results(
     Extension(pool): Extension<PgPool>,
     axum::extract::Path(poll_id): axum::extract::Path<Uuid>,
 ) -> Result<Json<PollResults>, AppError> {
+    debug!("Fetching results for poll: {}", poll_id);
 
-   debug!("Fetching results for poll: {}", poll_id);
-    
-   let poll = sqlx::query_as!(
+    let poll = sqlx::query_as!(
        Poll,
        r#"SELECT id, title, options as "options!: SqlxJson<Vec<String>>", expires_at as "expires_at!: DateTime<Utc>", created_at as "created_at!: DateTime<Utc>" 
        FROM polls WHERE id = $1"#,
@@ -146,90 +144,97 @@ async fn get_poll_results(
        AppError::NotFound(format!("Poll {} not found", poll_id))
    })?;
 
-   let total_votes = sqlx::query!(
-       "SELECT COUNT(*) as count FROM votes WHERE poll_id = $1",
-       poll_id
-   )
-   .fetch_one(&pool)
-   .await?
-   .count
-   .unwrap_or(0);
+    let total_votes = sqlx::query!(
+        "SELECT COUNT(*) as count FROM votes WHERE poll_id = $1",
+        poll_id
+    )
+    .fetch_one(&pool)
+    .await?
+    .count
+    .unwrap_or(0);
 
-   let mut options = Vec::with_capacity(poll.options.0.len());
+    let mut options = Vec::with_capacity(poll.options.0.len());
 
-   for (index, option_text) in poll.options.0.iter().enumerate() {
-       let votes = sqlx::query!(
-           "SELECT COUNT(*) as count FROM votes 
+    for (index, option_text) in poll.options.0.iter().enumerate() {
+        let votes = sqlx::query!(
+            "SELECT COUNT(*) as count FROM votes 
            WHERE poll_id = $1 AND option_index = $2",
-           poll_id,
-           index as i32
-       )
-       .fetch_one(&pool)
-       .await?
-       .count
-       .unwrap_or(0);
+            poll_id,
+            index as i32
+        )
+        .fetch_one(&pool)
+        .await?
+        .count
+        .unwrap_or(0);
 
-       let percentage = if total_votes > 0 {
-           (votes as f64 / total_votes as f64) * 100.0
-       } else {
-           0.0
-       };
+        let percentage = if total_votes > 0 {
+            (votes as f64 / total_votes as f64) * 100.0
+        } else {
+            0.0
+        };
 
-       options.push(PollOptionResult {
-           text: option_text.clone(),
-           votes,
-           percentage,
-       });
-   }
+        options.push(PollOptionResult {
+            text: option_text.clone(),
+            votes,
+            percentage,
+        });
+    }
 
-   Ok(Json(PollResults { options, total_votes }))
+    Ok(Json(PollResults {
+        options,
+        total_votes,
+    }))
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt()
+        .with_env_filter("poll_backend=debug,tower_http=debug")
+        .init();
 
-   tracing_subscriber::fmt()
-       .with_env_filter("poll_backend=debug,tower_http=debug")
-       .init();
+    dotenvy::dotenv().ok();
 
-   dotenvy::dotenv().ok();
-    
-   let database_url = std::env::var("DATABASE_URL")
-       .expect("DATABASE_URL must be set");
-    
-   let pool = PgPoolOptions::new()
-       .max_connections(5)
-       .connect(&database_url)
-       .await?;
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 
-   let cors_origin = std::env::var("CORS_ORIGIN")
-       .unwrap_or_else(|_| "https://crypto-poll-frontend.onrender.com".to_string());
+    let pool = PgPoolOptions::new()
+        .max_connections(5)
+        .connect(&database_url)
+        .await?;
 
-   let cors = CorsLayer::new()
-       .allow_origin(
-           cors_origin.parse::<HeaderValue>().expect("Invalid CORS origin")
-       )
-       .allow_methods([Method::GET, Method::POST])
-       .allow_headers(AllowHeaders::list([
-           HeaderName::from_static("content-type"),
-           HeaderName::from_static("authorization"),
-       ]))
-       .expose_headers(ExposeHeaders::list([
-           HeaderName::from_static("content-type"),
-           HeaderName::from_static("authorization"),
-       ]))
-       .max_age(Duration::from_secs(86400)); // 24-hour cache
+    let cors_origin = std::env::var("CORS_ORIGIN")
+        .unwrap_or_else(|_| "https://crypto-poll-frontend.onrender.com".to_string());
 
-   let app = Router::new()
-       .route("/polls", post(create_poll))
-       .route("/polls/{id}/results", get(get_poll_results))
-       .layer(cors)
-       .layer(Extension(pool));
+    let cors = CorsLayer::new()
+        .allow_origin(
+            cors_origin
+                .parse::<HeaderValue>()
+                .expect("Invalid CORS origin"),
+        )
+        .allow_origin(
+            // Add this for local development
+            "http://localhost:3000".parse::<HeaderValue>().unwrap(),
+        )
+        .allow_methods([Method::GET, Method::POST])
+        .allow_headers(AllowHeaders::list([
+            HeaderName::from_static("content-type"),
+            HeaderName::from_static("authorization"),
+        ]))
+        .expose_headers(ExposeHeaders::list([
+            HeaderName::from_static("content-type"),
+            HeaderName::from_static("authorization"),
+        ]))
+        .max_age(Duration::from_secs(86400)); // 24-hour cache
 
-   let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
-   println!("Server running on http://0.0.0.0:3000");
-   
-   axum::serve(listener, app).await?;
+    let app = Router::new()
+        .route("/polls", post(create_poll))
+        .route("/polls/{id}/results", get(get_poll_results))
+        .layer(cors)
+        .layer(Extension(pool));
 
-   Ok(())
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await?;
+    println!("Server running on http://0.0.0.0:3000");
+
+    axum::serve(listener, app).await?;
+
+    Ok(())
 }
