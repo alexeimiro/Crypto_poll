@@ -1,3 +1,4 @@
+// src/models.rs
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -6,7 +7,7 @@ use uuid::Uuid;
 pub struct Poll {
     pub id: Uuid,
     pub title: String,
-    pub options: Vec<String>, 
+    pub options: Vec<String>,
     pub expires_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
 }

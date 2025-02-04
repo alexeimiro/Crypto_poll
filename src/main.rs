@@ -1,11 +1,10 @@
-// src/main.rs (updated)
+// src/main.rs
 use axum::http::HeaderValue;
-use axum::Router;
+use axum::Router; // Keep this if Router is actually used
 use axum_server::Server;
 use dotenvy::dotenv;
 use std::net::SocketAddr;
 use tower_http::cors::{AllowOrigin, CorsLayer};
-
 mod db;
 mod handlers;
 mod models;
@@ -14,6 +13,8 @@ mod routes;
 #[tokio::main]
 async fn main() {
     dotenv().ok();
+    tracing_subscriber::fmt::init(); // Initialize tracing for logging
+
     let pool = db::create_pool().await.expect("Failed to create pool");
 
     // Run migrations first
