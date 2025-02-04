@@ -6,8 +6,7 @@ use uuid::Uuid;
 pub struct Poll {
     pub id: Uuid,
     pub title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub options: Option<Vec<String>>,
+    pub options: Vec<String>, 
     pub expires_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
 }
