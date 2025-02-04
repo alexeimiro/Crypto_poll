@@ -1,6 +1,6 @@
 // src/main.rs
 use axum::http::HeaderValue;
-use axum::Router; // Keep this if Router is actually used
+use axum::Router;
 use axum_server::Server;
 use dotenvy::dotenv;
 use std::net::SocketAddr;

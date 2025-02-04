@@ -1,7 +1,7 @@
 // src/routes.rs
 use axum::{Router, routing::{get, post}};
 use crate::handlers;
-use http::StatusCode; // Add this line
+use http::StatusCode;
 
 pub fn create_router() -> Router<sqlx::PgPool> {
     Router::new()
