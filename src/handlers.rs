@@ -1,13 +1,13 @@
 // src/handlers.rs
+use crate::models::{CreatePoll, Poll, VoteRequest};
 use axum::{
     extract::State,
     http::{HeaderMap, StatusCode},
     Json,
 };
-use chrono::{Utc, Duration};
+use chrono::{Duration, Utc};
 use sqlx::PgPool;
 use tracing::error; // For logging errors
-use crate::models::{Poll, CreatePoll, VoteRequest};
 
 /// Creates a new poll in the database.
 pub async fn create_poll(
@@ -16,13 +16,19 @@ pub async fn create_poll(
 ) -> Result<Json<Poll>, (StatusCode, String)> {
     let mut tx = pool.begin().await.map_err(|e| {
         error!("Failed to start transaction: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, "Database transaction failed".to_string())
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Database transaction failed".to_string(),
+        )
     })?;
 
-    // Delete previous polls (optional, depending on your requirements)
+    // Delete previous polls (optional)
     if let Err(e) = sqlx::query!("DELETE FROM polls").execute(&mut *tx).await {
         error!("Failed to delete previous polls: {}", e);
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, "Failed to delete previous polls".to_string()));
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to delete previous polls".to_string(),
+        ));
     }
 
     // Insert the new poll
@@ -41,12 +47,18 @@ pub async fn create_poll(
     .await
     .map_err(|e| {
         error!("Failed to insert poll: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, "Failed to create poll".to_string())
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to create poll".to_string(),
+        )
     })?;
 
     tx.commit().await.map_err(|e| {
         error!("Failed to commit transaction: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, "Transaction commit failed".to_string())
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Transaction commit failed".to_string(),
+        )
     })?;
 
     Ok(Json(poll))
@@ -64,7 +76,10 @@ pub async fn get_current_poll(
     .await
     .map_err(|e| {
         error!("Failed to fetch current poll: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, "Failed to fetch current poll".to_string())
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to fetch current poll".to_string(),
+        )
     })?;
 
     Ok(Json(poll))
@@ -91,7 +106,10 @@ pub async fn submit_vote(
     .await
     .map_err(|e| {
         error!("Failed to fetch current poll: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, "Failed to fetch current poll".to_string())
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to fetch current poll".to_string(),
+        )
     })?
     .ok_or((StatusCode::NOT_FOUND, "No active poll".to_string()))?;
 
@@ -108,7 +126,10 @@ pub async fn submit_vote(
     .await
     .map_err(|e| {
         error!("Failed to check for existing vote: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, "Failed to check for existing vote".to_string())
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to check for existing vote".to_string(),
+        )
     })?;
 
     if existing_vote.is_some() {
@@ -128,7 +149,10 @@ pub async fn submit_vote(
     .await
     .map_err(|e| {
         error!("Failed to submit vote: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, "Failed to submit vote".to_string())
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to submit vote".to_string(),
+        )
     })?;
 
     Ok(Json(()))
@@ -146,7 +170,10 @@ pub async fn get_results(
     .await
     .map_err(|e| {
         error!("Failed to fetch current poll: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, "Failed to fetch current poll".to_string())
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to fetch current poll".to_string(),
+        )
     })?
     .ok_or((StatusCode::NOT_FOUND, "No active poll".to_string()))?;
 
@@ -163,7 +190,10 @@ pub async fn get_results(
     .await
     .map_err(|e| {
         error!("Failed to fetch results: {}", e);
-        (StatusCode::INTERNAL_SERVER_ERROR, "Failed to fetch results".to_string())
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to fetch results".to_string(),
+        )
     })?
     .into_iter()
     .map(|r| (r.option_index, r.count.unwrap_or(0)))
